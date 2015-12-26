@@ -1,0 +1,513 @@
+package ir;
+
+import java.util.*;
+import java.io.*;
+
+public class PageRank{
+	final static int MAX_NUMBER_OF_DOCS = 2000000;
+	Hashtable<String,Integer> docNumber = new Hashtable<String,Integer>();
+	String[] docName = new String[MAX_NUMBER_OF_DOCS];
+	HashMap<Integer,HashSet<Integer>> link = new HashMap<Integer,HashSet<Integer>>();
+	
+	int numDocs;
+	String linksFile;
+	String articleNamesFile;
+	int[] out = new int[MAX_NUMBER_OF_DOCS];
+	int numberOfSinks = 0;
+	
+	final static double BORED = 0.15;
+	final static double EPSILON = 0.0001;
+	final static int MAX_NUMBER_OF_ITERATIONS = 1000;
+
+	public PageRank(String linksFile, String articleNamesFile) {
+		this.linksFile = linksFile;
+		this.articleNamesFile = articleNamesFile;
+
+		numDocs = readDocs(linksFile);
+	}
+
+	public void pagerank(Map<String, Double> pagerankScores) {
+		pagerankScores.clear();
+		try {
+			// first read the mapping from pagerank's document numbers to the filenames
+			Map<Integer, String> articleNames = new HashMap<Integer, String>();
+			BufferedReader br = new BufferedReader(new FileReader(articleNamesFile));
+			String line;
+			while ((line = br.readLine()) != null) {
+				String[] s = line.split(";");
+				articleNames.put(Integer.parseInt(s[0]), s[1]);
+			}
+	
+			// TODO: have all types here
+			//double[] scores = exactPagerank(numDocs);
+			//double[] scores = approxPagerank2(numDocs);
+			double[] scores = mcEndPointRandomStart(numDocs, 0.02);
+			
+			print(scores);
+			for (int i = 1; i < scores.length; i++) {
+				pagerankScores.put(articleNames.get(i), scores[i]);
+			}
+
+		} catch (Exception e ) {
+			e.printStackTrace();
+			System.err.println("fail during pagerank");
+		}
+	}
+	
+	public double[] exactPagerank(int numberOfDocs) {
+		final double c = 1 - BORED;	
+		final double jumpProbability = BORED / numberOfDocs;
+		final double universalProbability = c / (numberOfDocs - 1);
+		
+		// Power iteration
+		double[] x = new double[numberOfDocs]; // (0,0,0,...)
+		double[] xprim = new double[numberOfDocs];
+		double avg = 1.0 / numberOfDocs;
+		for (int i = 0; i < numberOfDocs; i++) xprim[i] = avg;
+
+		int iterations = 0;
+		boolean done = false;
+		while (!done) {
+			iterations++;
+			System.out.println("iteration: " + iterations);
+			x = xprim;
+			xprim = matrixRMult(c, jumpProbability, universalProbability, x);
+
+			if (Double.compare(euclideanDistance(x, xprim), EPSILON) < 0 || iterations > 10) 
+				done = true;
+		}
+		
+		return x;
+	}
+
+	private double[] matrixRMult(double C, double jumpProb, double universalProb, double[] x) {
+		double[] xprim = new double[x.length];
+
+		// first add the contribution from all the ones that have outgoing links to their respective columns
+		for (Map.Entry<Integer, HashSet<Integer>> l : link.entrySet()) {
+			int from = l.getKey();
+			for (int to : l.getValue()) xprim[to] += C / out[from] * x[from]; 
+		}
+
+		// then add the universal jump probability to the ones without outgoing links
+		// and bored jump probability to all
+		for (int c = 0; c < x.length; c++) {
+			for (int r = 0; r < x.length; r++) {
+				if (out[r] == 0) xprim[c] += universalProb * x[r];
+				xprim[c] += jumpProb * x[r];
+			}
+		}
+
+		return xprim;
+	}
+	
+	private double euclideanDistance(double[] x, double[] y) {
+		double sum = 0.0;
+		for (int i = 0; i < x.length; i++) sum += Math.pow(x[i] - y[i], 2.0);
+		return Math.sqrt(sum);
+	}
+
+	public double[] approxPagerank(int numberOfDocs) {
+		double c = 1 - BORED;
+		double BORED_OVER_N = BORED / numberOfDocs;
+		double NUM_SINKS_OVER_N_SQ = ((double) numberOfSinks) / (numberOfDocs * numberOfDocs);	
+
+		double[] x = new double[numberOfDocs];
+		double[] xprim = new double[numberOfDocs];
+		double avg = 1.0 / numberOfDocs;
+		for (int i = 0; i < numberOfDocs; i++) x[i] = avg;
+
+		int iterations = 0;
+		boolean done = false;
+		while (!done) {
+			iterations++;
+			xprim = new double[numberOfDocs];
+			for (int i = 0; i < numberOfDocs; i++) {
+				if (link.containsKey(i))
+					for (int j : link.get(i)) // adds probability to get to the neighbors
+						xprim[j] += (x[i] * c) / ((double) link.get(i).size());
+
+				xprim[i] += BORED_OVER_N; // bored jump probability 
+
+				// with this the values differ more, did they assume it was 0?
+				//xprim[i] += NUM_SINKS_OVER_N_SQ; // 0 for full wiki?
+			}
+
+			double dist = euclideanDistance(x, xprim);
+			if (Double.compare(euclideanDistance(x, xprim), EPSILON) < 0 || iterations > 1000)
+				done = true;
+			else 
+				x = xprim.clone();
+		}
+
+		return x;
+	}
+	
+	// this computes the same as the exact but faster, anything wrong?
+	public double[] approxPagerank2(int numberOfDocs) {
+		double c = 1 - BORED;
+		double BORED_OVER_N = BORED / numberOfDocs;
+		double NUM_SINKS_OVER_N_SQ = ((double) numberOfSinks) / (numberOfDocs * numberOfDocs);	
+
+		double[] x = new double[numberOfDocs];
+		double[] xprim = new double[numberOfDocs];
+		double avg = 1.0 / numberOfDocs;
+		for (int i = 0; i < numberOfDocs; i++) x[i] = avg;
+
+		int iterations = 0;
+		boolean done = false;
+		while (!done) {
+			iterations++;
+			xprim = new double[numberOfDocs];
+
+			for (int i = 0; i < numberOfDocs; i++) {
+				if (link.containsKey(i))
+					for (int j : link.get(i)) // add probability to neighbors
+						xprim[j] += (x[i] * c) / ((double) link.get(i).size());
+				else
+					for (int j = 0; j < numberOfDocs; j++)
+						if (i != j) 
+							xprim[j] += (x[i] * c) / ((double) numberOfDocs - 1);
+
+				xprim[i] += BORED_OVER_N; // bored jump probability
+			}
+
+			if (Double.compare(euclideanDistance(x, xprim), EPSILON) < 0 || iterations > 1000)
+				done = true;
+			else 
+				x = xprim.clone();
+		}
+
+		return x;
+	}
+
+	public double[] mcEndPointRandomStart(int numberOfDocs, double scalar) {
+		Random rand = new Random(System.currentTimeMillis());
+		final int N = (int) (numberOfDocs * numberOfDocs * scalar);
+		int[] ends = new int[numberOfDocs];
+		for (int i = 0; i < N; i++) {
+			KeepLast kl = new KeepLast();
+			randomWalkGeneral(rand, numberOfDocs, kl);
+			ends[kl.doc]++;
+		}
+		
+		double[] x = new double[numberOfDocs];
+		for (int i = 0; i < ends.length; i++) x[i] = ((double) ends[i]) / N;
+
+		return x;
+	}
+
+	public double[] mcEndPointCyclicStart(int numberOfDocs) {
+
+		HashMap<String, Object> options = new HashMap<String, Object>();
+		options.put("start", 5); // just to see how to use
+
+		return null;
+	}
+	
+	// Performs a random walk from the start document
+	// and returns the end document.
+	// TODO: should this keep going for a set number of steps
+	// or should it terminate if BORED?
+	// avrachenkov says one thing and Hedvig something else
+	private int randomWalkStart(int start, Random rand, int numberOfDocs) {
+		int end = start;
+
+		double chance = rand.nextDouble();
+
+		while (Double.compare(chance, BORED) > 0) {
+			if (link.containsKey(end)) {
+				int index = rand.nextInt(link.get(end).size());
+				int i = 0;
+				for (int doc : link.get(end)) {
+					if (i == index) {
+						end = doc;
+						break;
+					}
+
+					i++;
+				}
+
+			} else {
+				boolean valid = false;
+				int doc = rand.nextInt(numberOfDocs);
+				if (doc != end) valid = true;
+
+				while (!valid) {
+					doc = rand.nextInt(numberOfDocs);
+					if (doc != end) valid = true;
+				}
+
+				end = doc;
+			}
+
+			// see whether to continuing following links
+			chance = rand.nextDouble();
+		}
+
+		return end;
+	}
+
+	private int randomWalkStart(int start, Random rand, int numDocs,
+			int numSteps) {
+
+		int doc = start;
+		for (int step = 0; step < numSteps; step++) {
+			double chance = rand.nextDouble();
+
+			if (Double.compare(chance, BORED) > 0) {
+				if (link.containsKey(doc)) {
+					// follow link
+					int index = rand.nextInt(link.get(doc).size());
+					int i = 0;
+					for (int next : link.get(doc)) {
+						if (i == index) {
+							doc = next;
+							break;
+						}
+
+						i++;
+					}
+
+				} else {
+					// teleport
+					boolean valid = false;
+					int next = rand.nextInt(numDocs);
+					if (next != doc) {
+						valid = true;
+					}
+
+					while (!valid) {
+						next = rand.nextInt(numDocs);
+						if (next != doc) {
+							valid = true;
+						}
+					}
+
+					doc = next;
+				}
+
+			} else {
+				// teleport
+
+				boolean valid = false;
+				int next = rand.nextInt(numDocs);
+				if (next != doc) {
+					valid = true;
+				}
+
+				while (!valid) {
+					next = rand.nextInt(numDocs);
+					if (next != doc) {
+						valid = true;
+					}
+				}
+
+				doc = next;
+			}
+		}
+
+		return doc;
+	}
+
+	private void randomWalkRecordVisits(int start, int[] visits,
+			Random rand, int numberOfDocs) {
+
+		int doc = start;
+		visits[doc]++;
+
+		double chance = rand.nextDouble();
+
+		// continue following link until the random surfer
+		// is bored
+		while (Double.compare(chance, BORED) > 0) {
+			if (link.containsKey(doc)) {
+				int index = rand.nextInt(link.get(doc).size());
+				int i = 0;
+				for (int nextDoc : link.get(doc)) {
+					if (i == index) {
+						visits[nextDoc]++;
+						doc = nextDoc;
+						break;
+					}
+
+					i++;
+				}
+
+			} else {
+
+				// theoretically this can go on forever
+				// TODO: fix this
+				boolean valid = false;
+				int nextDoc = rand.nextInt(numberOfDocs);
+				if (nextDoc != doc) {
+					valid = true;
+				}
+
+				while (!valid) {
+					nextDoc = rand.nextInt(numberOfDocs);
+					if (nextDoc != doc) {
+						valid = true;
+					}
+				}
+
+				visits[nextDoc]++;
+				doc = nextDoc;
+			}
+
+			// see whether to continue following links
+			chance = rand.nextDouble();
+		}
+	}
+
+	private void randomWalkGeneral(Random rand, int numDocs, CallBack cb) {
+		randomWalkGeneral(new HashMap<String, Object>(), rand, numDocs, cb);
+	}
+
+	private void randomWalkGeneral(HashMap<String, Object> options, Random rand, int numDocs, CallBack cb) {
+		int start = rand.nextInt(numDocs);
+		if (options.containsKey("start")) start = ((Integer) options.get("start")).intValue();
+		
+		int doc = start;
+		cb.act(doc);
+		
+		double chance = rand.nextDouble();
+		while (Double.compare(chance, BORED) > 0) { // TODO: change to do while?
+			if (link.containsKey(doc)) {
+				int index = rand.nextInt(link.get(doc).size());
+				int i = 0;
+				for (int next : link.get(doc)) { // can't pick a random element from set in constant time
+					if (i++ == index) {
+						doc = next;
+						break;
+					}
+				}
+
+			} else {
+				boolean valid = false;
+				int next = rand.nextInt(numDocs);
+				if (next != doc) valid = true;
+
+				while (!valid) {
+					next = rand.nextInt(numDocs);
+					if (next != doc) valid = true;
+				}
+
+				doc = next;
+			}
+
+			cb.act(doc);
+			chance = rand.nextDouble();
+		}
+	}
+
+	private interface CallBack {
+		public void act(int doc);
+	}
+
+	private class RecordVisits implements CallBack {
+		double[] visits;
+		RecordVisits(double[] visits) {
+			this.visits = visits;
+		}
+		public void act(int doc) {
+			visits[doc]++;
+		}
+	}
+
+	private class KeepLast implements CallBack {
+		int doc;
+		public void act(int doc) {
+			this.doc = doc;
+		}
+	}
+	
+	private int readDocs( String filename ) {
+		int fileIndex = 0;
+		try {
+			System.err.print( "Reading file... " );
+			BufferedReader in = new BufferedReader( new FileReader( filename ));
+			String line;
+			while ((line = in.readLine()) != null && fileIndex<MAX_NUMBER_OF_DOCS ) {
+				int index = line.indexOf( ";" );
+				String title = line.substring( 0, index );
+				Integer fromdoc = docNumber.get( title );
+				//  Have we seen this document before?
+				if ( fromdoc == null ) {	
+					// This is a previously unseen doc, so add it to the table.
+					fromdoc = fileIndex++;
+					docNumber.put( title, fromdoc );
+					docName[fromdoc] = title;
+				}
+				// Check all outlinks.
+				StringTokenizer tok = new StringTokenizer( line.substring(index+1), "," );
+				while ( tok.hasMoreTokens() && fileIndex<MAX_NUMBER_OF_DOCS ) {
+					String otherTitle = tok.nextToken();
+					Integer otherDoc = docNumber.get( otherTitle );
+					if ( otherDoc == null ) {
+						// This is a previousy unseen doc, so add it to the table.
+						otherDoc = fileIndex++;
+						docNumber.put( otherTitle, otherDoc );
+						docName[otherDoc] = otherTitle;
+					}
+					// Set the probability to 0 for now, to indicate that there is
+					// a link from fromdoc to otherDoc.
+					if (link.get(fromdoc) == null) {
+						link.put(fromdoc, new HashSet<Integer>());
+					}
+					if (!link.get(fromdoc).contains(otherDoc)) {
+						link.get(fromdoc).add(otherDoc);
+						out[fromdoc]++;
+					}
+				}
+			}
+			if ( fileIndex >= MAX_NUMBER_OF_DOCS ) {
+				System.err.print( "stopped reading since documents table is full. " );
+			}
+			else {
+				System.err.print( "done. " );
+			}
+			// Compute the number of sinks.
+			for ( int i=0; i<fileIndex; i++ ) {
+				if ( out[i] == 0 )
+					numberOfSinks++;
+			}
+		}
+		catch ( FileNotFoundException e ) {
+			System.err.println( "File " + filename + " not found!" );
+		}
+		catch ( IOException e ) {
+			System.err.println( "Error reading file " + filename );
+		}
+		System.err.println( "Read " + fileIndex + " number of documents" );
+		return fileIndex;
+	}
+	
+	private void print(double[] x) {
+		List<Doc> pageRankList = new ArrayList<Doc>();
+		for (int i = 0; i < x.length; i++) pageRankList.add(new Doc(docName[i], x[i]));
+		Collections.sort(pageRankList);
+		for (int i = 0; i < 50; i++) System.out.println((i+1) + "\t" + pageRankList.get(i));
+	}
+	
+	// only used for printing
+	private class Doc implements Comparable<Doc> {
+		String docName;
+		double score; 
+
+		Doc(String docName, double score) {
+			this.docName = docName;
+			this.score = score;
+		}
+
+		@Override
+		public int compareTo(Doc other) {
+			return Double.compare(other.score, score);
+		}	
+
+		@Override
+		public String toString() {
+			return docName + "\t" + score;
+		}
+	}
+}

@@ -1,0 +1,2 @@
+#!/bin/bash
+java -Xmx1024m -cp .:/info/DD2476/ir15/lab/pdfbox ir.SearchGUI -d /info/DD2476/ir15/lab/davisWiki -p /info/DD2476/ir15/lab/pagerank/linksDavis.txt /info/DD2476/ir15/lab/pagerank/articleTitles.txt
